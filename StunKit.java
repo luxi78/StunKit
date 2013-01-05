@@ -1,5 +1,8 @@
 import java.net.DatagramSocket;
+import java.net.DatagramPacket;
+import java.net.InetAddress;
 import java.net.SocketException;
+import java.io.IOException;
 
 class StunKit {
     private static final String STUN_SERVER_ADDRESS = "stun.meizu.com";
@@ -26,10 +29,8 @@ class StunKit {
             e.printStackTrace();
         }
 
-        // 
-
-
-
+        //do test1
+        ResponseResult stunResponse = stunTest(socket, null); 
 
 
 
@@ -44,7 +45,7 @@ class StunKit {
         return result;
     }
 
-    private static class ReponseResult {
+    private static class ResponseResult {
         public boolean responsed;
         public String externalIp;
         public int externalPort;
@@ -54,9 +55,42 @@ class StunKit {
         public int changedPort;
     }
 
-    private static ReponseResult stunTest(DatagramSocket socket, byte[] sendData) {
-        int dataLength = sendData==null? 0:sendData.length;
-                
+    private static ResponseResult stunTest(DatagramSocket socket, byte[] msgData) {
+        ResponseResult result = new ResponseResult();
+        int msgLength = msgData==null? 0:msgData.length;
+        MessageHeader header = new MessageHeader();
+        header.generateTransactionID();
+        header.setMessageLength(msgLength);
+        header.setStunType(MessageHeader.StunType.BIND_REQUEST_MSG);
+        byte[] headerData = header.encode();
+        byte[] sendData = new byte[headerData.length + msgLength];
+        System.arraycopy(headerData, 0, sendData, 0, headerData.length);
+        if(msgLength > 0) System.arraycopy(msgData, 0, sendData, headerData.length, msgLength);
+        
+        boolean recvCorrect = false;
+        while(!recvCorrect) {
+            boolean received = false;
+            int count = 3;
+            while(!received) {
+               try{
+                   DatagramPacket  sendPacket = new DatagramPacket(
+                       sendData, 
+                       sendData.length, 
+                       InetAddress.getByName(STUN_SERVER_ADDRESS), 
+                       STUN_SERVER_PORT);
+                   socket.send(sendPacket);
+               } catch (Exception e) {
+                   e.printStackTrace();
+                   if(count > 0) {
+                       count--;
+                   } else {
+                       result.responsed = false;
+                        return result;
+                   }
+               }
+
+            }
+        }
         return null;
     }
 
@@ -92,18 +126,10 @@ class StunKit {
            SHARED_SECRET_REQUEST_MSG(0x0002),
            SHARED_SECRET_RESPONSE_MSG(0X0102),
            SHARED_SECRETERROR_RESPONSE_MSG(0x0112);
-
-           private StunType(int value) {
-               this.value = value;
-           }
-
-           public String toString() {
-               return super.toString() + "value:" + value;
-           }
            private final int value;
-           public int getValue() {
-               return value;
-           }
+           private StunType(int value) {this.value = value;}
+           public String toString() {return super.toString() + "value:" + value;}
+           public int getValue() {return value;}
         }
 
         public  StunType getStunType(){
@@ -145,16 +171,20 @@ class StunKit {
             }
         }
 
-        public void generateTransactionID() throws UtilityException {
+        public void generateTransactionID() {
             mTranId = new byte[16];
-            System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 0, 2);
-            System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 2, 2);
-            System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 4, 2);
-            System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 6, 2);
-            System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 8, 2);
-            System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 10, 2);
-            System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 12, 2);
-            System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 14, 2);
+            try  {
+                System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 0, 2);
+                System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 2, 2);
+                System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 4, 2);
+                System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 6, 2);
+                System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 8, 2);
+                System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 10, 2);
+                System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 12, 2);
+                System.arraycopy(Utility.integerToTwoBytes((int)(Math.random() * 65536)), 0, mTranId, 14, 2);
+            } catch (UtilityException e) {
+                e.printStackTrace();
+            }
         }
 
         public byte[] getTransactionId() {
@@ -235,4 +265,14 @@ class StunKit {
         }	                                      
     }
 
+    public static void main(String[] args) {
+        System.out.println("aaa");
+        DatagramSocket socket = null;
+        try{
+            socket = new DatagramSocket();
+            StunResult stunResult = makeStun(socket);            
+        } catch (Exception e ) {
+            e.printStackTrace();
+        }
+    }
 }
