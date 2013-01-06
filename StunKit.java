@@ -3,6 +3,7 @@ import java.net.DatagramPacket;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.io.IOException;
+import java.util.Arrays;
 
 class StunKit {
     private static final String STUN_SERVER_ADDRESS = "stun.meizu.com";
@@ -32,11 +33,6 @@ class StunKit {
         //do test1
         ResponseResult stunResponse = stunTest(socket, null); 
 
-
-
-
-
-
         try {
             socket.setSoTimeout(oldReceiveTimeout);
         } catch( SocketException e) {
@@ -58,20 +54,20 @@ class StunKit {
     private static ResponseResult stunTest(DatagramSocket socket, byte[] msgData) {
         ResponseResult result = new ResponseResult();
         int msgLength = msgData==null? 0:msgData.length;
-        MessageHeader header = new MessageHeader();
-        header.generateTransactionID();
-        header.setMessageLength(msgLength);
-        header.setStunType(MessageHeader.StunType.BIND_REQUEST_MSG);
-        byte[] headerData = header.encode();
+        MessageHeader bindRequestHeader = new MessageHeader();
+        bindRequestHeader.generateTransactionID();
+        bindRequestHeader.setMessageLength(msgLength);
+        bindRequestHeader.setStunType(MessageHeader.StunType.BIND_REQUEST_MSG);
+        byte[] headerData = bindRequestHeader.encode();
         byte[] sendData = new byte[headerData.length + msgLength];
         System.arraycopy(headerData, 0, sendData, 0, headerData.length);
         if(msgLength > 0) System.arraycopy(msgData, 0, sendData, headerData.length, msgLength);
         
         boolean recvCorrect = false;
         while(!recvCorrect) {
-            boolean received = false;
             int count = 3;
-            while(!received) {
+            byte[] receivedData = null;
+            while(receivedData == null) {
                try{
                    DatagramPacket  sendPacket = new DatagramPacket(
                        sendData, 
@@ -79,24 +75,152 @@ class StunKit {
                        InetAddress.getByName(STUN_SERVER_ADDRESS), 
                        STUN_SERVER_PORT);
                    socket.send(sendPacket);
+
+                   DatagramPacket receivePacket = new DatagramPacket(new byte[256], 256);
+                   socket.receive(receivePacket);
+                   receivedData = receivePacket.getData();
                } catch (Exception e) {
                    e.printStackTrace();
                    if(count > 0) {
                        count--;
                    } else {
                        result.responsed = false;
-                        return result;
+                       return result;
                    }
                }
-
             }
+            
+            Message receivedMessage = Message.parseData(receivedData);
+            if(     receivedMessage != null && 
+                    receivedMessage.getStunType() == MessageHeader.StunType.BIND_RESPONSE_MSG &&
+                    Arrays.equals(receivedMessage.getTransactionId(), bindRequestHeader.getTransactionId()) ) {
+                
+            }
+
         }
         return null;
     }
 
     private static class UtilityException extends Exception {
-        private static final long serialVersionUID = 3545800974716581680L;
+        //private static final long serialVersionUID = 3545800974716581680L;
         UtilityException(String mesg) { super(mesg); }
+    }
+
+    private static class Message {
+        private MessageHeader header;
+        /*
+        public MessageHeader getHeader() {
+            return header;
+        }
+        */
+        private MessageAttribute[] attributes;
+
+
+        public MessageHeader.StunType getStunType() {
+            if(header == null) return null;
+            return header.getStunType(); 
+        }
+
+        public byte[] getTransactionId() {
+            if(header == null) return null;
+            return header.getTransactionId();
+        }
+
+
+        public static Message parseData(byte[] messageData) {
+            return null;
+        }
+    }
+
+    private static abstract class MessageAttribute {
+       /*
+        *  0                   1                   2                   3 
+        *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+        * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        * |         Type                  |            Length             |
+        * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        * |                             Value                             ....
+        * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        * */
+        
+        /*
+        public enum Type {
+            MAPPED_ADDRESS(0x0001);
+            RESPONSE_ADDRESS(0X0002);
+            CHANGE_REQUEST(0X0003);
+            SOURCE_ADDRESS(0X0004);
+            CHANGED_ADDRESS(0X0005);
+            private final int value;
+            private Type(int value) {this.value = valaue;}
+            public String toString() {return super.toString() + "value:" + value;}
+            public int getValue() { return value;}
+        }
+        */
+        public abstract int getTypeCode(); 
+        public abstract int getLength();
+    }
+
+    private static abstract class AddressAttribute extends  MessageAttribute {
+        /*
+         * 0                   1                   2                   3
+         * 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+         *+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *|x x x x x x x x|    Family     |           Port                |
+         *+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         *|                             Address                           |
+         * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+         */
+
+        @Override
+        public int getLength() { return 8; }
+
+        private int mPort;
+        public int getPort() { return mPort; }
+        private String mAddress;
+        public String getAddress() { return mAddress; }
+    }
+    
+    private static class MappedAddress extends AddressAttribute {
+        @Override
+        public int getTypeCode() { return 0x0001; }
+    }
+
+    private static class ResponseAddress extends AddressAttribute {
+        @Override
+        public int getTypeCode() { return 0x0002; }
+    }
+
+    private static class SourceAddress extends AddressAttribute {
+        @Override
+        public int getTypeCode() { return 0x0004; }
+    }
+
+    private static class ChangedAddress extends AddressAttribute {
+        @Override
+        public int getTypeCode() { return 0x0005; }
+    }
+
+    private static class ChangeRequest extends MessageAttribute {
+       /*
+       * 0                   1                   2                   3
+       * 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+       * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       * |0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 A B 0|
+       * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       */
+       @Override 
+       public int getTypeCode() { return 0x0003; }
+       
+       @Override
+       public int getLength() { return 4; }
+       
+       boolean mChangeIp;
+       public boolean isChangeIp() {return mChangeIp;}
+       public void setChangeIp(boolean changeIp) { mChangeIp = changeIp; }
+
+       boolean mChangePort;
+       public boolean isChangePort() {return mChangePort;}
+       public void setChangePort(boolean changePort) { mChangePort = changePort; }
     }
 
     private static class MessageHeader {
@@ -146,6 +270,7 @@ class StunKit {
            }
            return null;
         }
+
         public void setStunType(StunType type) {
            try {
                mStunType = Utility.integerToTwoBytes(type.getValue());
@@ -267,12 +392,20 @@ class StunKit {
 
     public static void main(String[] args) {
         System.out.println("aaa");
+        /*
         DatagramSocket socket = null;
         try{
             socket = new DatagramSocket();
             StunResult stunResult = makeStun(socket);            
         } catch (Exception e ) {
             e.printStackTrace();
+        }
+        */
+
+        byte[] aaa= new byte[4];
+        byte[] bbb = new byte[5];
+        if(Arrays.equals(null, bbb)) {
+            System.out.println("equal");
         }
     }
 }
