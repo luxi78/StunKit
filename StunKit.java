@@ -128,6 +128,29 @@ class StunKit {
 
 
         public static Message parseData(byte[] messageData) {
+            try {
+            MessageHeader header = new MessageHeader();
+
+            int msgLength = Utility.twoBytesToInteger(messageData, 2);
+            if(messageData.length != msgLength + 20) return null;
+            header.setMessageLength(msgLength);
+
+            int stunType = Utility.twoBytesToInteger(messageData, 0);
+            MessageHeader.StunType[] types = MessageHeader.StunType.values();
+            for(MessageHeader.StunType type : types) {
+                if(type.getValue() == stunType) header.setStunType(type);                
+            }
+            if(header.getStunType() == null) return null;
+
+            byte[] tranId = new byte[16];
+            System.arraycopy(messageData, 4, tranId, 0, 16); 
+            header.setTransactionId(tranId);
+            } catch(Exception e) {
+                e.printStackTrace();
+            }
+
+            //MessageHead解析完成，接下来是接续所有的属性
+
             return null;
         }
     }
@@ -257,6 +280,7 @@ class StunKit {
         }
 
         public  StunType getStunType(){
+           if(mStunType == null) return null;
            try {
                int intType = Utility.twoBytesToInteger(mStunType);
                StunType[] types = StunType.values();
@@ -278,6 +302,7 @@ class StunKit {
                e.printStackTrace();
            }
         }
+
 
         public int getMessageLength() {
             try {
@@ -366,33 +391,50 @@ class StunKit {
         }
 
         public static final int oneByteToInteger(byte value) throws UtilityException {
-            return (int)value & 0xFF;
+            byte[] val  = new byte[1];
+            val[0] = value;
+            return oneByteToInteger(val, 0);
+        }
+
+        public static final int oneByteToInteger(byte[] value, int offset) throws UtilityException {
+            if (value.length < 1+offset) {
+                throw new UtilityException("Byte array too short!");
+            }
+
+            return (int)value[offset] & 0xFF;
         }
 
         public static final int twoBytesToInteger(byte[] value) throws UtilityException {
-            if (value.length < 2) {
+            return twoBytesToInteger(value, 0);
+        }
+
+        public static final int twoBytesToInteger(byte[] value, int offset) throws UtilityException {
+            if (value.length < 2+offset) {
                 throw new UtilityException("Byte array too short!");
             }
-            int temp0 = value[0] & 0xFF;
-            int temp1 = value[1] & 0xFF;
+            int temp0 = value[offset] & 0xFF;
+            int temp1 = value[1+offset] & 0xFF;
             return ((temp0 << 8) + temp1);
         }
 
         public static final long fourBytesToLong(byte[] value) throws UtilityException {
-            if (value.length < 4) {
+            return fourBytesToLong(value, 0);
+        }
+
+        public static final long fourBytesToLong(byte[] value, int offset) throws UtilityException {
+            if (value.length < 4+offset) {
                 throw new UtilityException("Byte array too short!");
             }
-            int temp0 = value[0] & 0xFF;
-            int temp1 = value[1] & 0xFF;
-            int temp2 = value[2] & 0xFF;
-            int temp3 = value[3] & 0xFF;
+            int temp0 = value[offset] & 0xFF;
+            int temp1 = value[1 + offset] & 0xFF;
+            int temp2 = value[2 + offset] & 0xFF;
+            int temp3 = value[3 + offset] & 0xFF;
             return (((long)temp0 << 24) + (temp1 << 16) + (temp2 << 8) + temp3);
         }	                                      
     }
 
     public static void main(String[] args) {
         System.out.println("aaa");
-        /*
         DatagramSocket socket = null;
         try{
             socket = new DatagramSocket();
@@ -400,12 +442,13 @@ class StunKit {
         } catch (Exception e ) {
             e.printStackTrace();
         }
-        */
 
+        /*
         byte[] aaa= new byte[4];
         byte[] bbb = new byte[5];
         if(Arrays.equals(null, bbb)) {
             System.out.println("equal");
         }
+        */
     }
 }
