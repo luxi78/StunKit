@@ -4,11 +4,12 @@ import java.net.InetAddress;
 import java.net.SocketException;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.ArrayList;
 
 class StunKit {
     private static final String STUN_SERVER_ADDRESS = "stun.meizu.com";
     private static final int STUN_SERVER_PORT = 3478;
-    private static final int RECEIVE_TIMEOUT = 2;
+    private static final int RECEIVE_TIMEOUT = 3000;
 
     public enum NatType {
         BLOCKED, OPEN_INTERNET, FULL_CONE, SYMMETRIC_FIREWALL, RESTRICTED_CONE_NAT, RESTRICTED_PORT_NAT, SYMMETRIC_NAT;
@@ -32,6 +33,7 @@ class StunKit {
 
         //do test1
         ResponseResult stunResponse = stunTest(socket, null); 
+        System.out.println(stunResponse);
 
         try {
             socket.setSoTimeout(oldReceiveTimeout);
@@ -49,6 +51,18 @@ class StunKit {
         public int sourcePort;
         public String changedIp;
         public int changedPort;
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("responsed:\t").append(responsed).
+                append("\nexternalIp:\t").append(externalIp).
+                append("\nexternalPort:\t").append(externalPort).
+                append("\nsourceIp:\t").append(sourceIp).
+                append("\nsourcePort:\t").append(sourcePort).
+                append("\nchangedIp:\t").append(changedIp).
+                append("\nchangedPort:\t").append(changedPort);
+            return sb.toString();
+        }
     }
 
     private static ResponseResult stunTest(DatagramSocket socket, byte[] msgData) {
@@ -63,10 +77,11 @@ class StunKit {
         System.arraycopy(headerData, 0, sendData, 0, headerData.length);
         if(msgLength > 0) System.arraycopy(msgData, 0, sendData, headerData.length, msgLength);
         
-        boolean recvCorrect = false;
-        while(!recvCorrect) {
-            int count = 3;
+        int tryForGettingCorrectPacketCount = 3;
+        while(tryForGettingCorrectPacketCount > 0) {
+            int tryForGettingDataCount = 3;
             byte[] receivedData = null;
+            System.out.println("###############################################################");
             while(receivedData == null) {
                try{
                    DatagramPacket  sendPacket = new DatagramPacket(
@@ -76,13 +91,16 @@ class StunKit {
                        STUN_SERVER_PORT);
                    socket.send(sendPacket);
 
-                   DatagramPacket receivePacket = new DatagramPacket(new byte[256], 256);
+                   DatagramPacket receivePacket = new DatagramPacket(new byte[1024], 1024);
                    socket.receive(receivePacket);
-                   receivedData = receivePacket.getData();
+
+                   receivedData = Arrays.copyOfRange(receivePacket.getData(), 0,  receivePacket.getLength());
+                   System.out.println("got data! -------------------------------------------------------##" + receivedData.length);
                } catch (Exception e) {
                    e.printStackTrace();
-                   if(count > 0) {
-                       count--;
+                   System.out.println("tryForGettingDataCount is : " + tryForGettingDataCount);
+                   if(tryForGettingDataCount > 0) {
+                       tryForGettingDataCount--;
                    } else {
                        result.responsed = false;
                        return result;
@@ -94,9 +112,29 @@ class StunKit {
             if(     receivedMessage != null && 
                     receivedMessage.getStunType() == MessageHeader.StunType.BIND_RESPONSE_MSG &&
                     Arrays.equals(receivedMessage.getTransactionId(), bindRequestHeader.getTransactionId()) ) {
-                
+                MessageAttribute[] attributes = receivedMessage.getAttributes();
+                System.out.println("message data was received , attributes list below:");
+                result.responsed = true;
+                for(MessageAttribute attr : attributes) {
+                    //System.out.println(attr.toString());
+                    if(attr instanceof MappedAddress) {
+                        MappedAddress ma = (MappedAddress)attr;
+                        result.externalIp = ma.getAddress();
+                        result.externalPort = ma.getPort();
+                    } else if(attr instanceof SourceAddress) {
+                        SourceAddress sa = (SourceAddress)attr;
+                        result.sourceIp = sa.getAddress();
+                        result.sourcePort = sa.getPort(); 
+                    } else if(attr instanceof ChangedAddress) {
+                        ChangedAddress ca = (ChangedAddress)attr;
+                        result.changedIp = ca.getAddress();
+                        result.changedPort = ca.getPort();
+                    }
+                }
+                return result;
             }
 
+            tryForGettingCorrectPacketCount--;
         }
         return null;
     }
@@ -114,6 +152,7 @@ class StunKit {
         }
         */
         private MessageAttribute[] attributes;
+        public MessageAttribute[] getAttributes() {return attributes;}
 
 
         public MessageHeader.StunType getStunType() {
@@ -129,73 +168,149 @@ class StunKit {
 
         public static Message parseData(byte[] messageData) {
             try {
-            MessageHeader header = new MessageHeader();
+                MessageHeader header = new MessageHeader();
 
-            int msgLength = Utility.twoBytesToInteger(messageData, 2);
-            if(messageData.length != msgLength + 20) return null;
-            header.setMessageLength(msgLength);
+                int msgLength = Utility.twoBytesToInteger(messageData, 2);
+                if(messageData.length != msgLength +MessageHeader.HEAD_LENGTH) return null;
+                header.setMessageLength(msgLength);
 
-            int stunType = Utility.twoBytesToInteger(messageData, 0);
-            MessageHeader.StunType[] types = MessageHeader.StunType.values();
-            for(MessageHeader.StunType type : types) {
-                if(type.getValue() == stunType) header.setStunType(type);                
-            }
-            if(header.getStunType() == null) return null;
+                int stunType = Utility.twoBytesToInteger(messageData, 0);
+                MessageHeader.StunType[] types = MessageHeader.StunType.values();
+                for(MessageHeader.StunType type : types) {
+                    if(type.getValue() == stunType) {
+                    	header.setStunType(type);                
+                    	break;
+                    }
+                }
+                if(header.getStunType() == null) return null;
 
-            byte[] tranId = new byte[16];
-            System.arraycopy(messageData, 4, tranId, 0, 16); 
-            header.setTransactionId(tranId);
+                byte[] tranId = new byte[16];
+                System.arraycopy(messageData, 4, tranId, 0, 16); 
+                header.setTransactionId(tranId);
+
+                //MessageHead parsing is finished
+                MessageAttribute[] attributes = MessageAttribute.parseData(messageData);
+                if(attributes != null && attributes.length > 0) {
+                    Message msg = new Message();
+                    msg.header = header; 
+                    msg.attributes = attributes;
+                    return msg;
+                }
+
             } catch(Exception e) {
                 e.printStackTrace();
             }
-
-            //MessageHead解析完成，接下来是接续所有的属性
-
             return null;
         }
     }
 
+   /*
+    *  0                   1                   2                   3 
+    *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    * |         Type                  |            Length             |
+    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    * |                             Value                             ....
+    * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    * */
     private static abstract class MessageAttribute {
-       /*
-        *  0                   1                   2                   3 
-        *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-        * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        * |         Type                  |            Length             |
-        * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        * |                             Value                             ....
-        * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-        * */
-        
-        /*
-        public enum Type {
-            MAPPED_ADDRESS(0x0001);
-            RESPONSE_ADDRESS(0X0002);
-            CHANGE_REQUEST(0X0003);
-            SOURCE_ADDRESS(0X0004);
-            CHANGED_ADDRESS(0X0005);
-            private final int value;
-            private Type(int value) {this.value = valaue;}
-            public String toString() {return super.toString() + "value:" + value;}
-            public int getValue() { return value;}
+        private static final int MAPPED_ADDRESS = 0x0001;
+        private static final int RESPONSE_ADDRESS = 0X0002;
+        private static final int CHANGE_REQUEST = 0X0003;
+        private static final int SOURCE_ADDRESS = 0X0004;
+        private static final int CHANGED_ADDRESS = 0X0005;
+            
+        public static MessageAttribute[] parseData(byte[] messageData) {
+            try {
+                ArrayList<MessageAttribute> attributeList = new ArrayList<MessageAttribute>();
+                int offset = MessageHeader.HEAD_LENGTH;
+                //int lengthRemain =  Utility.twoBytesToInteger(messageData, 2);
+                
+                while( offset < messageData.length ) {
+                    int attrType = Utility.twoBytesToInteger(messageData, offset);          
+                    int attrLength = Utility.twoBytesToInteger(messageData, offset + 2);
+
+                    MessageAttribute attr = null;
+                    switch(attrType) {
+                        case MAPPED_ADDRESS:
+                            attr = new MappedAddress();
+                            break;
+                        case SOURCE_ADDRESS:
+                            attr = new SourceAddress();
+                            break;
+                        case CHANGED_ADDRESS:
+                            attr = new ChangedAddress();
+                            break;
+                        default:
+                            attr = new UnknownAttribute(attrType, attrLength);
+                    }
+                    if(messageData.length >= attr.getLength() + offset + 4) {
+                        attr.parse(messageData, offset + 4);
+                        attributeList.add(attr);
+                    } else {
+                        //messageData is incorrect
+                       throw new Exception("messageData is incorrect");
+                    }
+                    offset += attrLength + 4;
+                }
+
+                int size = attributeList.size();
+                if(size > 0) {
+                    MessageAttribute[] attrs = new MessageAttribute[size];
+                    return attributeList.toArray(attrs);
+                }
+            } catch (Exception e ) {
+                e.printStackTrace();
+            }
+            return null;
         }
-        */
+
         public abstract int getTypeCode(); 
         public abstract int getLength();
+        public abstract void parse(byte[] messageData, int offset);
+        public abstract String toString();
     }
 
+    /*
+     * 0                   1                   2                   3
+     * 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+     *+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *|x x x x x x x x|    Family     |           Port                |
+     *+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *|                             Address                           |
+     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     */
     private static abstract class AddressAttribute extends  MessageAttribute {
-        /*
-         * 0                   1                   2                   3
-         * 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-         *+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *|x x x x x x x x|    Family     |           Port                |
-         *+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *|                             Address                           |
-         * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         */
 
         @Override
         public int getLength() { return 8; }
+
+        @Override
+        public String toString() {
+            return    new StringBuilder().
+                append("type:").append(getTypeCode()).
+                append("\tlength:").append(getLength()).
+                append("\tip:").append(mAddress).
+                append("\tport:").append(mPort).toString();
+        }
+
+        @Override
+        public void parse(byte[] messageData, int offset) {
+            try {
+                mPort = Utility.twoBytesToInteger(messageData, offset + 2);
+                StringBuilder sb = new StringBuilder(15);
+                sb.append(Utility.oneByteToInteger(messageData, offset + 4)).
+                    append(".").
+                    append(Utility.oneByteToInteger(messageData, offset + 5)).
+                    append(".").
+                    append(Utility.oneByteToInteger(messageData, offset + 6)).
+                    append(".").
+                    append(Utility.oneByteToInteger(messageData, offset + 7));
+                mAddress = sb.toString();
+            } catch (Exception e ) {
+                e.printStackTrace();
+            }
+        }
 
         private int mPort;
         public int getPort() { return mPort; }
@@ -208,10 +323,12 @@ class StunKit {
         public int getTypeCode() { return 0x0001; }
     }
 
+    /* ignore all attributes present in request
     private static class ResponseAddress extends AddressAttribute {
         @Override
         public int getTypeCode() { return 0x0002; }
     }
+    */
 
     private static class SourceAddress extends AddressAttribute {
         @Override
@@ -223,14 +340,15 @@ class StunKit {
         public int getTypeCode() { return 0x0005; }
     }
 
+   /*
+   * 0                   1                   2                   3
+   * 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   * |0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 A B 0|
+   * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   */
+    /*
     private static class ChangeRequest extends MessageAttribute {
-       /*
-       * 0                   1                   2                   3
-       * 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-       * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-       * |0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 A B 0|
-       * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-       */
        @Override 
        public int getTypeCode() { return 0x0003; }
        
@@ -245,23 +363,55 @@ class StunKit {
        public boolean isChangePort() {return mChangePort;}
        public void setChangePort(boolean changePort) { mChangePort = changePort; }
     }
+    */
 
+    private static class UnknownAttribute extends MessageAttribute {
+        int mTypeCode;
+        int mLength;
+        byte[] mValue;
+
+        public UnknownAttribute(int typeCode, int length) {
+            mTypeCode = typeCode;
+            mLength = length;
+        }
+
+        @Override 
+        public int getTypeCode() {return mTypeCode; }
+
+        @Override
+        public int getLength() { return mLength; } 
+
+        @Override 
+        public void parse(byte[] messageData, int offset) {
+           mValue = new byte[mLength]; 
+           System.arraycopy(messageData, offset, mValue, 0, mLength);
+        }
+
+        @Override
+        public String toString() {
+            return new StringBuilder().append("UnknownAttribute\t").
+                append("type:").append(mTypeCode).
+                append("\tlength:").append(mLength).toString();
+        }
+    }
+
+    /*
+     *  0                   1                   2                   3
+     *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     * |      STUN Message Type        |         Message Length        |
+     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     * |
+     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *
+     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *                          Transaction ID
+     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     *                                                                 |
+     * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+     */
     private static class MessageHeader {
-        /*
-         *  0                   1                   2                   3
-         *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-         * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         * |      STUN Message Type        |         Message Length        |
-         * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         * |
-         * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *
-         * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *                          Transaction ID
-         * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         *                                                                 |
-         * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-         */
+        public static final int HEAD_LENGTH = 20;
         private byte[] mStunType;// = new byte[2];
         private byte[] mMessageLength;// = new byte[2];
         private byte[] mTranId;// = new byte[16];
@@ -302,7 +452,6 @@ class StunKit {
                e.printStackTrace();
            }
         }
-
 
         public int getMessageLength() {
             try {
@@ -352,7 +501,7 @@ class StunKit {
             if(mMessageLength ==null || mMessageLength.length!=2) throw new RuntimeException("mMessageLength is not correct");
             if(mTranId==null || mTranId.length!=16) throw new RuntimeException(" mTranId is not correct");
 
-            byte[] result = new byte[20];
+            byte[] result = new byte[HEAD_LENGTH];
             System.arraycopy(mStunType, 0, result, 0, 2);
             System.arraycopy(mMessageLength, 0, result, 2, 2);
             System.arraycopy(mTranId, 0, result, 4, 16);
@@ -442,13 +591,5 @@ class StunKit {
         } catch (Exception e ) {
             e.printStackTrace();
         }
-
-        /*
-        byte[] aaa= new byte[4];
-        byte[] bbb = new byte[5];
-        if(Arrays.equals(null, bbb)) {
-            System.out.println("equal");
-        }
-        */
     }
 }
