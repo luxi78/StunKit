@@ -12,12 +12,20 @@ class StunKit {
     private static final int RECEIVE_TIMEOUT = 3000;
 
     public enum NatType {
-        BLOCKED, OPEN_INTERNET, FULL_CONE, SYMMETRIC_FIREWALL, RESTRICTED_CONE_NAT, RESTRICTED_PORT_NAT, SYMMETRIC_NAT;
+        BLOCKED, OPEN_INTERNET, FULL_CONE, SYMMETRIC_FIREWALL, RESTRICTED_CONE_NAT, RESTRICTED_PORT_NAT, SYMMETRIC_NAT, UNKNOWN;
     }
     public static class StunResult {
         public NatType natType;
         public String publicIp;
-        public short publicPort;
+        public int publicPort;
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("natType:\t").append(natType).
+                append("\npublicIp:\t").append(publicIp).
+                append("\npublicPort:\t").append(publicPort);
+            return sb.toString();
+        }
     }
 
     public static StunResult makeStun(DatagramSocket socket) {
@@ -33,13 +41,25 @@ class StunKit {
 
         //do test1
         ResponseResult stunResponse = stunTest(socket, null); 
-        System.out.println(stunResponse);
+        //System.out.println(stunResponse);
+
+        //NOTE:
+        //It is no need to understand the nat type for my desire,
+        //so ignore subsequent stun test
 
         try {
             socket.setSoTimeout(oldReceiveTimeout);
         } catch( SocketException e) {
             e.printStackTrace();
         }
+
+        if(stunResponse != null && stunResponse.responsed) {
+            result = new StunResult();
+            result.natType = NatType.UNKNOWN;
+            result.publicIp = stunResponse.externalIp;
+            result.publicPort = stunResponse.externalPort;
+        }
+
         return result;
     }
 
@@ -81,7 +101,7 @@ class StunKit {
         while(tryForGettingCorrectPacketCount > 0) {
             int tryForGettingDataCount = 3;
             byte[] receivedData = null;
-            System.out.println("###############################################################");
+            //System.out.println("###############################################################");
             while(receivedData == null) {
                try{
                    DatagramPacket  sendPacket = new DatagramPacket(
@@ -95,10 +115,10 @@ class StunKit {
                    socket.receive(receivePacket);
 
                    receivedData = Arrays.copyOfRange(receivePacket.getData(), 0,  receivePacket.getLength());
-                   System.out.println("got data! -------------------------------------------------------##" + receivedData.length);
+                   //System.out.println("got data! -------------------------------------------------------##" + receivedData.length);
                } catch (Exception e) {
                    e.printStackTrace();
-                   System.out.println("tryForGettingDataCount is : " + tryForGettingDataCount);
+                   //System.out.println("tryForGettingDataCount is : " + tryForGettingDataCount);
                    if(tryForGettingDataCount > 0) {
                        tryForGettingDataCount--;
                    } else {
@@ -113,7 +133,7 @@ class StunKit {
                     receivedMessage.getStunType() == MessageHeader.StunType.BIND_RESPONSE_MSG &&
                     Arrays.equals(receivedMessage.getTransactionId(), bindRequestHeader.getTransactionId()) ) {
                 MessageAttribute[] attributes = receivedMessage.getAttributes();
-                System.out.println("message data was received , attributes list below:");
+                //System.out.println("message data was received , attributes list below:");
                 result.responsed = true;
                 for(MessageAttribute attr : attributes) {
                     //System.out.println(attr.toString());
@@ -582,14 +602,20 @@ class StunKit {
         }	                                      
     }
 
+    /*
     public static void main(String[] args) {
         System.out.println("aaa");
         DatagramSocket socket = null;
         try{
-            socket = new DatagramSocket();
+            int port = Integer.parseInt(args[0]);
+            socket = new DatagramSocket(port);
             StunResult stunResult = makeStun(socket);            
+            System.out.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+            System.out.println(stunResult);
+            socket.close();
         } catch (Exception e ) {
             e.printStackTrace();
         }
     }
+    */
 }
